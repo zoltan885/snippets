@@ -72,12 +72,17 @@ def _fioparser(fn=None):
 
 class fioFile():
     def __init__(self, fiofile, nodata='NAN'):
+        self.fiofile = fiofile
         self.nodata = nodata
-        self.sweep = False
-        self._fioparser(fn=fiofile)
-        if self.sweep:
+        self.sweepType = None
+        self._fioparser(fn=self.fiofile)
+        self.allFilesExist = False
+        if self.sweepType is not None:
             self._gen_file_list()
-        print(self.sweep)
+            self._check_files_exist()
+            if self.allFilesExist:
+                self._gen_image_file_positions()
+        print(f"Sweep type: {self.sweepType}")
 
 
     def _fioparser(self, fn=None):
@@ -135,7 +140,7 @@ class fioFile():
         
         self.command = self.comment[0]
         if self.command.split(" ")[0] in ['fastsweep2', 'supersweep2', 'timesweep2']:
-            self.sweep = True
+            self.sweepType = self.command.split(" ")[0][:-6]  # fast, super or time
         print('Command: ', self.command)
         self.user = self.comment[1].split(' ')[1]
         print('User: ', self.user)
@@ -162,14 +167,65 @@ class fioFile():
                 #channelNo = int(par.lower().partition('_')[0][7:])
                 #self.savedir['%d' % channelNo] = par.lower().rpartition(' = ')[2].replace('\\', '/').replace('t:/', 'gpfs/')
 
-    def _gen_file_list(self):
+    def _gen_file_list(self):  # only if sweep
         for k,v in self.detectors.items():
             path = v['Filedir']
+            asap3path = os.path.realpath(self.fiofile).partition('/raw/')[0]
+            realpath = os.path.join(asap3path, 'raw', path.partition('/raw/')[2])
             pattern = v['Filepattern'].strip(" ")
             extension = pattern.rpartition(".")[2]
             if extension in ['cbf', 'tif']:
                 fileids = [int(i) for i in self.data[k]]
             elif extension in ['hdf']:
                 fileids = [1]  # TODO: handle hdf files from Varex and Manta as well as from the Eiger
-            files = [os.path.join(path, pattern%i) for i in fileids]
+            files = [os.path.join(realpath, pattern%i) for i in fileids]
             self.detectors[k]['Filelist'] = files
+    
+    def _check_files_exist(self, verbose=True):  # only if sweep
+        success = True
+        for k,v in self.detectors.items():
+            c = 0
+            for f in v['Filelist']:
+                try:
+                    assert os.path.exists(f), f"No such file: {f}"
+                    c += 1
+                except AssertionError as AE:
+                    print(AE)
+                    success = False
+            if verbose:
+                print(f"Detector {k}: found {c} files of {len(v['Filelist'])}")
+        if success:
+            self.allFilesExist = True
+    
+    def _gen_image_file_positions(self, extramots=[], verbose=True):  # only if sweep
+        if self.sweepType == 'super':
+            outer_axis = self.command.split(' ')[1]
+            outer_axis_poss = self.data[list(self.data.keys())[2]]
+        if self.sweepType in ['super', 'fast']:
+            sweep_axis_poss = [(i+j)/2 for (i,j) in zip(self.data[list(self.data.keys())[0]], self.data[list(self.data.keys())[1]])]
+            if self.sweepType == 'super':
+                sweep_axis = self.command.split(' ')[5]
+            elif self.sweepType == 'fast':
+                sweep_axis = self.command.split(' ')[1]
+        extrapos = []
+        for e in extramots:
+            if e in self.data.keys():
+                extrapos.append(self.data[e])
+                if verbose:
+                    print(f"{e} motor positions added from the encoded motros, i.e. real measured motor position")
+            elif e in self.parameterdict.keys():
+                extrapos.append([self.parameterdict[e] for _ in range(len(self.data[list(self.data.keys())[0]]))])
+                if verbose:
+                    print(f"{e} motor positions added from the parameters list, i.e. motor position at the start of the scan")
+            else:
+                if verbose:
+                    print(f"{e} motor positions could not be added")
+        self.image_file_positions = {}
+        if self.sweepType == 'super':
+            self.image_file_positions[outer_axis] = outer_axis_poss
+            self.image_file_positions[sweep_axis] = sweep_axis_poss
+        if self.sweepType == 'fast':
+            self.image_file_positions[sweep_axis] = sweep_axis_poss
+        if extrapos != []:
+            for name,pos in zip(extramots, extrapos):
+                self.image_file_positions[name] = pos
