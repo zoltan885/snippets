@@ -221,6 +221,8 @@ class fioFile():
                 if verbose:
                     print(f"{e} motor positions could not be added")
         self.image_file_positions = {}
+        for k,v in self.detectors.items():
+            self.image_file_positions[k] = v['Filelist']
         if self.sweepType == 'super':
             self.image_file_positions[outer_axis] = outer_axis_poss
             self.image_file_positions[sweep_axis] = sweep_axis_poss
@@ -229,3 +231,17 @@ class fioFile():
         if extrapos != []:
             for name,pos in zip(extramots, extrapos):
                 self.image_file_positions[name] = pos
+    
+    def get_pos(self, imfile):
+        imfile = os.path.realpath(imfile)
+        for k in self.detectors.keys():
+            for i,n in enumerate(self.image_file_positions[k]):
+                if imfile == n:
+                    dct = {}
+                    #dct['name'] = imfile
+                    for k,v in self.image_file_positions.items():
+                        dct[k] = v[i]
+                    return dct
+        else:
+            raise ValueError(f"{imfile} is not in the list of any of the detectors used in this scan")
+                
