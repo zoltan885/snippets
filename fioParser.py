@@ -70,9 +70,14 @@ def _fioparser(fn=None):
     
 
 
+import numpy as np
+from dateutil.parser import parse
+import os
+import json
 class fioFile():
     def __init__(self, fiofile, nodata='NAN'):
         self.fiofile = fiofile
+        self.path = os.path.realpath(self.fiofile).partition('/raw/')[0]
         self.nodata = nodata
         self.sweepType = None
         self._fioparser(fn=self.fiofile)
@@ -83,8 +88,25 @@ class fioFile():
             if self.allFilesExist:
                 self._gen_image_file_positions()
         print(f"Sweep type: {self.sweepType}")
+        
+    def __str__(self):
+        return '''Python object holding a parsed fio file.
+        In the case of a sweep fio file the class generates all corresponding file names (for all detectors used in the sweep) and checks if they exist.
+        If the scan was a sweep and all files exist, a dictionary containing the sweep and outer (if any) encoder positions is created. This can then be queried via the get_pos method either giving it a filename or an index, which represents the N-th step in the sweep.
+        If other motor/encoder positions are also required (id the dictionary returned by the get_pos method) the dictionary may be recreated with the _gen_image_file_positions method, which accepts a keyword option called extramots=[], where one can give in additional motor names.
+        
+        '''
 
-
+    def _get_asap3_path(self):
+        '''
+        get the data path from the core system
+        '''
+        if os.path.realpah(self.fiofile).startswith('/asap3/'):
+            return os.path.realpah(self.fiofile).partition('/raw/')[0]
+        elif os.path.realpath(self.fiofile).startswith('/gpfs/'):
+            metaFile = [x for x in  os.listdir('/gpfs/current/') if x.enswith('.json')][0]
+            return json.load(open(os.path.join('/gpfs/current/', metaFile)))['corePath']
+        
     def _fioparser(self, fn=None):
         lines = open(fn).read().splitlines()
         self.comment = []
@@ -170,13 +192,12 @@ class fioFile():
     def _gen_file_list(self):  # only if sweep
         for k,v in self.detectors.items():
             path = v['Filedir']
-            asap3path = os.path.realpath(self.fiofile).partition('/raw/')[0]
-            realpath = os.path.join(asap3path, 'raw', path.partition('/raw/')[2])
+            realpath = os.path.join(self.path, 'raw', path.partition('/raw/')[2])
             pattern = v['Filepattern'].strip(" ")
             extension = pattern.rpartition(".")[2]
             if extension in ['cbf', 'tif']:
                 fileids = [int(i) for i in self.data[k]]
-            elif extension in ['hdf']:
+            elif extension in ['hdf', 'nxs']:
                 fileids = [1]  # TODO: handle hdf files from Varex and Manta as well as from the Eiger
             files = [os.path.join(realpath, pattern%i) for i in fileids]
             self.detectors[k]['Filelist'] = files
@@ -232,16 +253,31 @@ class fioFile():
             for name,pos in zip(extramots, extrapos):
                 self.image_file_positions[name] = pos
     
-    def get_pos(self, imfile):
-        imfile = os.path.realpath(imfile)
-        for k in self.detectors.keys():
-            for i,n in enumerate(self.image_file_positions[k]):
-                if imfile == n:
-                    dct = {}
-                    #dct['name'] = imfile
-                    for k,v in self.image_file_positions.items():
-                        dct[k] = v[i]
-                    return dct
-        else:
-            raise ValueError(f"{imfile} is not in the list of any of the detectors used in this scan")
-                
+    def get_pos(self, ident):
+        '''
+        ident is either a file name or the sequence number (iden-th image of the sweep)
+        '''
+        if isinstance(ident, str):
+            asap3path = os.path.realpath(self.fiofile).partition('/raw/')[0]
+            realpath = os.path.join(asap3path, 'raw', ident.partition('/raw/')[2])
+            
+            imfile = os.path.realpath(ident)
+            for k in self.detectors.keys():
+                for i,n in enumerate(self.image_file_positions[k]):
+                    if imfile == n:
+                        dct = {}
+                        dct['index'] = i
+                        #dct['name'] = imfile
+                        for kk,v in self.image_file_positions.items():
+                            dct[kk] = v[i]
+                        return dct
+            else:
+                raise ValueError(f"{imfile} is not in the list of any of the detectors used in this scan")
+        elif isinstance(ident, int):
+            assert ident < len(self.data[list(self.data.keys())[0]]), f"index {ident} is out of range ({len(self.data[list(self.data.keys())[0]])})"
+            for k in self.detectors.keys():
+                dct = {}
+                dct['index'] = ident
+                for k,v in self.image_file_positions.items():
+                    dct[k] = v[ident]
+                return dct
